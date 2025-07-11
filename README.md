@@ -5,8 +5,9 @@ A developer tool for testing Model Context Protocol (MCP) servers with comprehen
 **Key Features:**
 - Multi-server support (stdio, HTTP, SSE) using official MCP SDK
 - Precise token counting with Anthropic's API
-- Interactive CLI with JSON configuration
-- Fallback support for non-standard MCP servers
+- Enhanced interactive CLI with session-based token analysis
+- Flexible token cost calculation (inline and post-hoc)
+- JSON configuration and fallback support
 
 ## Installation
 
@@ -35,8 +36,11 @@ uv run mcp-test connect --server demo
 # 3. Call a tool with token analysis
 uv run mcp-test call-tool --server demo --tool "search" --args '{"query": "test"}'
 
-# 4. Start interactive session
+# 4. Start interactive session with token analysis
 uv run mcp-test interactive --server demo
+# > set auto_tokens on
+# > call search {"query": "test"}
+# > tokens  # Analyze previous response
 ```
 
 ## MCP Configuration
@@ -105,15 +109,43 @@ uv run mcp-test call-tool --server github --tool "search_repositories" --args '{
 # Use different model for token counting
 uv run mcp-test call-tool --tool "get_file" --args '{"path": "README.md"}' --model claude-opus-4
 
-# Interactive session
+# Interactive session with token analysis
 uv run mcp-test interactive --server github
+```
+
+**Interactive session examples:**
+```bash
+# Configure session for automatic token analysis
+> set auto_tokens on
+> set model claude-sonnet-4
+> set overhead 150
+
+# Call tool with automatic analysis
+> call search_repositories {"query": "MCP"}
+
+# Force token analysis on specific call
+> call get_file {"path": "README.md"} --tokens
+
+# Analyze previous response retrospectively
+> tokens
+
+# Show current configuration
+> set
 ```
 
 **Interactive mode commands:**
 - `help`: Show available commands
 - `list`: List available tools  
-- `call <tool> [args]`: Call a tool with optional JSON arguments
+- `call <tool> [args] [--tokens] [--no-tokens]`: Call a tool with optional JSON arguments
+- `tokens`: Analyze token count of the previous response
+- `set [<key> <value>]`: Set session configuration or show all settings
 - `exit` or `quit`: Exit the session
+
+**Session configuration:**
+- `provider`: Token provider (anthropic, openai) - default: anthropic
+- `model`: Model name for token counting - default: claude-3-5-sonnet-20241022
+- `overhead`: Token overhead estimate - default: 100
+- `auto_tokens`: Auto-analyze tokens after each call (on/off) - default: off
 
 ## Command Reference
 
@@ -178,14 +210,6 @@ mcp_token_tester/
 2. Add provider to `TokenCounterFactory`
 3. Update environment variables and documentation
 
-### Dependencies
-
-- `mcp`: Official MCP Python SDK (>=1.0.0)
-- `httpx`: HTTP client for MCP servers
-- `click`: CLI framework
-- `pydantic`: Data validation
-- `anthropic`: Anthropic API client
-- `python-dotenv`: Environment variable management
 
 ## Contributing
 

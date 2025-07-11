@@ -8,7 +8,15 @@ from mcp import ClientSession, StdioServerParameters, types
 from mcp.client.stdio import stdio_client
 from mcp.client.streamable_http import streamablehttp_client
 from mcp.client.sse import sse_client
-from mcp.shared.metadata_utils import get_display_name
+# Implement get_display_name locally since it's not available in current MCP SDK
+def get_display_name(obj):
+    """Get human-readable name for MCP objects."""
+    if hasattr(obj, 'title') and obj.title:
+        return obj.title
+    elif hasattr(obj, 'name') and obj.name:
+        return obj.name
+    else:
+        return str(obj)
 
 from .config import MCPServerConfig
 

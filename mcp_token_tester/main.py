@@ -251,6 +251,68 @@ def interactive(ctx, server):
     async def _interactive():
         client = MCPSDKClient(server_config)
         
+        # Session configuration
+        session_config = {
+            'provider': 'anthropic',
+            'model': os.getenv('ANTHROPIC_MODEL', 'claude-3-5-sonnet-20241022'),
+            'overhead': 100,
+            'auto_tokens': False
+        }
+        
+        # Store last response for tokens command
+        last_response = None
+        last_tool_name = None
+        last_tool_args = None
+        
+        def parse_command_with_flags(command_str):
+            """Parse command and extract flags"""
+            # First, extract flags from the end
+            flags = []
+            remaining_command = command_str
+            
+            # Look for flags at the end of the command
+            while True:
+                flag_match = False
+                for flag in ['--tokens', '--no-tokens']:
+                    if remaining_command.endswith(' ' + flag):
+                        flags.append(flag[2:])  # Remove --
+                        remaining_command = remaining_command[:-len(flag)-1].strip()
+                        flag_match = True
+                        break
+                if not flag_match:
+                    break
+            
+            # Now parse the remaining command (without flags)
+            parts = remaining_command.split(None, 2)  # Split into at most 3 parts
+            
+            return parts, flags
+        
+        def display_token_analysis(tool_name, tool_args, response_dict):
+            """Display token analysis for a tool call"""
+            try:
+                # Get API key (optional for Anthropic token counting)
+                api_key = None
+                if session_config['provider'].lower() == 'anthropic':
+                    api_key = os.getenv('ANTHROPIC_API_KEY')
+                
+                counter = TokenCounterFactory.create_counter(
+                    session_config['provider'], 
+                    session_config['model'], 
+                    api_key
+                )
+                analyzer = TokenAnalyzer(counter, session_config['overhead'])
+                
+                analysis = analyzer.analyze_tool_call(tool_name, tool_args, response_dict)
+                
+                click.echo(f"\n--- Token Analysis ({session_config['provider']} {session_config['model']}) ---")
+                click.echo(f"Input tokens (estimated): {analysis['input_tokens']}")
+                click.echo(f"Response tokens (actual): {analysis['response_tokens']}")
+                click.echo(f"Total tokens: {analysis['total_tokens']}")
+                click.echo(f"Overhead tokens: {analysis['overhead_tokens']}")
+                
+            except Exception as e:
+                click.echo(f"Error analyzing tokens: {e}")
+        
         try:
             click.echo(f"Connecting to {server_config.name}...")
             if not await client.connect():
@@ -268,8 +330,15 @@ def interactive(ctx, server):
                     elif command.lower() == 'help':
                         click.echo("Commands:")
                         click.echo("  list - List available tools")
-                        click.echo("  call <tool> <args> - Call a tool")
+                        click.echo("  call <tool> [args] [--tokens] [--no-tokens] - Call a tool")
+                        click.echo("  tokens - Analyze token count of previous response")
+                        click.echo("  set [<key> <value>] - Set session config or show all config")
                         click.echo("  exit - Exit interactive session")
+                        click.echo("\nConfiguration keys:")
+                        click.echo("  provider - Token provider (anthropic, openai)")
+                        click.echo("  model - Model name for token counting")
+                        click.echo("  overhead - Token overhead estimate (integer)")
+                        click.echo("  auto_tokens - Auto-analyze tokens (on/off)")
                     elif command.lower() == 'list':
                         tools = client.get_tools()
                         if tools:
@@ -278,14 +347,57 @@ def interactive(ctx, server):
                                 click.echo(f"  • {tool['name']}: {tool['description']}")
                         else:
                             click.echo("No tools available.")
+                    elif command.startswith('set'):
+                        parts = command.split(None, 2)
+                        if len(parts) == 1:
+                            # Show all config
+                            click.echo("Current session configuration:")
+                            for key, value in session_config.items():
+                                click.echo(f"  {key}: {value}")
+                        elif len(parts) == 3:
+                            # Set config
+                            key, value = parts[1], parts[2]
+                            if key in session_config:
+                                # Type conversion
+                                if key == 'overhead':
+                                    try:
+                                        session_config[key] = int(value)
+                                    except ValueError:
+                                        click.echo(f"Invalid value for {key}: must be an integer")
+                                        continue
+                                elif key == 'auto_tokens':
+                                    if value.lower() in ['on', 'true', '1']:
+                                        session_config[key] = True
+                                    elif value.lower() in ['off', 'false', '0']:
+                                        session_config[key] = False
+                                    else:
+                                        click.echo(f"Invalid value for {key}: use 'on' or 'off'")
+                                        continue
+                                else:
+                                    session_config[key] = value
+                                click.echo(f"Set {key} to {session_config[key]}")
+                            else:
+                                click.echo(f"Unknown configuration key: {key}")
+                        else:
+                            click.echo("Usage: set [<key> <value>]")
+                    elif command.lower() == 'tokens':
+                        if last_response is None:
+                            click.echo("No previous response to analyze. Use 'call' to make a request first.")
+                        else:
+                            display_token_analysis(last_tool_name, last_tool_args, last_response)
                     elif command.startswith('call '):
-                        parts = command[5:].split(' ', 1)
-                        if len(parts) < 1:
-                            click.echo("Usage: call <tool> [args]")
+                        args, flags = parse_command_with_flags(command)
+                        
+                        if len(args) < 2:
+                            click.echo("Usage: call <tool> [args] [--tokens] [--no-tokens]")
                             continue
                         
-                        tool_name = parts[0]
-                        args_str = parts[1] if len(parts) > 1 else "{}"
+                        tool_name = args[1]
+                        args_str = args[2] if len(args) > 2 else "{}"
+                        
+                        # Parse flags
+                        force_tokens = 'tokens' in flags
+                        no_tokens = 'no-tokens' in flags
                         
                         try:
                             tool_args = json.loads(args_str)
@@ -308,7 +420,23 @@ def interactive(ctx, server):
                                 "content": serialized_content,
                                 "isError": response.isError or False
                             }
+                            
+                            # Store for tokens command
+                            last_response = response_dict
+                            last_tool_name = tool_name
+                            last_tool_args = tool_args
+                            
                             click.echo(json.dumps(response_dict, indent=2, default=str))
+                            
+                            # Token analysis logic
+                            should_analyze = False
+                            if force_tokens:
+                                should_analyze = True
+                            elif not no_tokens and session_config['auto_tokens']:
+                                should_analyze = True
+                            
+                            if should_analyze:
+                                display_token_analysis(tool_name, tool_args, response_dict)
                         else:
                             click.echo("Tool call failed.")
                     else:
